@@ -1,0 +1,16 @@
+原本通过 DS 生成解析用的 py 文件，但是遇到的问题是 DS 把自己绕进了某个 bug 里面没出来
+
+1. Protocol6+ 字段 8 字节 — 我读了 Protocol6.h 的 FNewEventEvent union 定义，但忽略了 C++ 编译器会对 union 做 16-bit 对齐填充。源码只有声明，padding 只在编译后的二进制中体现
+2. PacketSize — 我读了 Transport.h 中的 FTidPacketBase { uint16 PacketSize; }，但没追踪 TidPacketTransport.cpp 中 pos += packet_size 这行——它直接说明 PacketSize 包含 4 字节头。我只关注了结构体定义，没看消费端如何推进偏移
+3. Magic 值 — 我读了 Engine.cpp:5215 看到 'TRCE' 就自己推算字节值，没想到 C++ 多字符字面量在小端的数值表达。这是对 C++ 语言细节的误判，不是没读到源码
+4. Important 流的 FImportantEventHeader — 我一直在分析 Protocol5Stage::ParseEvent() 单事件解析，没注意到 Events/Importants 线程走的是 ParseImportantEvents() 另一个函数，用完全不同的 {uid:u16, size:u16} 格式
+5. EventBatchV2 — 我追了 EnterScope/LeaveScope 走向，没追踪 CpuProfilerTraceAnalysis.cpp——真正的 CPU timing 数据不在裸 scope 事件中，而是在 EventBatch 的 7-bit varint 载荷里
+
+优化提示词
+
+1. 从文件第一个字节开始，追踪每一层如何消费字节、如何推进偏移，直到事件名被读出的完整链路
+2. 画出从磁盘文件 → TidPacket 缓冲区 → 事件流 → 类型注册表的完整字节流动图，标注每一步消费多少字节、产出什么格式
+3. 对于每个 size/offset/count 字段，找到它被写入的位置（TraceLog 端）和被读取的位置（分析引擎端），确认两边的计算方式一致。例如 PacketSize：写入时算的什么，读取时解的什么
+4. 列出你在解析过程中做的所有假设（如"PacketSize 不含头"、"字段 6 字节"、"NewEvent 总是 0x00 开头"），对每条给出验证方法：在源码哪个位置可以确认/推翻这个假设
+
+
