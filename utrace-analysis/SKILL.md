@@ -23,7 +23,9 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
 
 任何一个必填项缺失就主动追问，不要硬猜。
 
-## 工作流
+## 工作流（生成 JSON）
+
+本 SKILL.md 只负责**怎么从 utrace 生成 JSON**。**拿到 JSON 之后如何分析、如何下结论 → 读同目录 `ANALYSIS.md`**。
 
 1. **环境**：`python -c "import lz4.block"`，缺则提示用户 `pip install lz4`，不要绕。
 2. **跑分析**（**必须 `Bash` 后台运行**，`run_in_background: true` + `timeout: 900000`，trace 越大越久；600 MiB 约 3 min）：
@@ -33,18 +35,22 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
        --top-n 10 --track GameThread \
        --output "<output>.json"
    ```
-3. **先读 `meta`** —— JSON 顶部就是全集统计（`total_calls` / `duration_us_per_call` 的 min/p50/p90/p99/max / `top_n_covers_all_hits`）。看完就能判断是否真有"异常"，是否需要更深入的子调用分析。
-   - 若 `meta` 已能回答用户问题（例如 p99/max 都很正常 ⇒ 无异常），直接结论，**跳过第 4 步**。
-4. **要细查"为什么慢"** —— 跑摘要脚本，**不要直接 `Read` `frames`**（可能上 MB）：
+3. **拿到 JSON 后转入 `ANALYSIS.md`** —— 该文档是分析方法论，包含：
+   - 读 meta 判跨度
+   - 抽每帧 N、列回归表
+   - 判形状（O(N) 累积 / 单点异常 / 混合 / 外部干扰）
+   - **★ O(N) / 混合型必须追问 N 的系统上界（读源码外推，不能只看 utrace 的 max(N)）**
+   - 单点异常的子树拆解 + 零假设证伪
+   - 多轴对比避免误判
+   - 输出格式与禁忌
+
+   **不要在 SKILL.md 里重复这套方法论**——以 ANALYSIS.md 为准。
+
+4. **细查子调用时**用摘要脚本，**不要直接 `Read` `frames`**（可能上 MB）：
    ```bash
    python <SKILL_DIR>/scripts/summarize_frames.py "<output>.json" \
        [--top-frames 5] [--top-subs 15]
    ```
-   摘要脚本会在 stdout 给你三块（< 10 KB）：
-   - **Top-N 慢帧子调用聚合**：每帧内 sub-timer 的 count + sum_us（同一 sub-scope 在帧内被调多少次、合计多久）
-   - **跨帧全局子 timer 热点**：所有捕获帧打通的 sum_us 排序——**反复出现的子调用**就是优化突破口
-   - **Log 频次摘要**：按 Category 与消息模板（前 80 字符）聚合，找反复出现的 warning/error
-5. **提炼**给用户：Top-N 帧概览 + 重点子 timer + Log 异常 + 改进方向假设（标 ⚠️）。**禁止原样贴 JSON**。
 
 ## 输出 JSON schema
 
@@ -99,6 +105,7 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
    - `meta.top_n_covers_all_hits = true` 表示 Top-N 已经包含**所有**命中帧，再加大 N 也不会有新数据。
    - stderr 末尾的 `captured «<func>» trees=N` 与 `meta.total_calls` 同义——表示整份 trace 里该函数共命中 N 次，**Top-N 之外没有更多命中**。
    - 不要为了"看完整分布"重跑一次 `--top-n 全部命中数`：会再多花一次解析时间 + 数 GB JSON，且不会得到 `meta` 没给过的信息。除非用户**明确要求**逐帧明细，否则不要这么做。
+6. **拿到 JSON 后必须读 `ANALYSIS.md` 走一遍方法论**——不要只看 max 帧给结论，不要把 utrace 里观测到的 max(N) 当系统上限。
 
 ## 常见失败 → 处置
 
@@ -109,4 +116,4 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
 | `未支持的 ProtocolVersion=N` | 把版本号给用户，确认引擎版本 |
 | 没给 `--track` 时找不到线程 | 跑 `scripts/utrace_top_frames.py <utrace> --list-threads` 列出可用 thread name |
 
-详细参数 / schema / 实现细节见同目录 `README.md`。
+详细参数 / schema / 实现细节见同目录 `README.md`；分析方法论见同目录 `ANALYSIS.md`。
