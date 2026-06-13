@@ -8,9 +8,6 @@
 > 本目录是一个独立 skill 的源文件，目前**没有**导入到 Claude 环境。
 > Claude 选中本 skill 是通过读取 `SKILL.md` 顶部 frontmatter 的 `description`。
 
-使用例子: "帮我查看 "C:\Users\happyelements\AppData\Local\UnrealEngine\Common\UnrealTrace\Store\001\20260321_
-  111621.utrace" 文件中 PrepareFillNPCDataByNum 异常调用时间，并分析问题原因"
-
 ## 目录结构
 
 ```

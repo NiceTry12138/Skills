@@ -81,6 +81,11 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
     "<function_name>": {
       "calls": [{                        // 同帧多次命中 → 多元素
         "Name": "...", "useTime": "11.3ms", "Time": "...",
+        "CallFrom": [                    // 调用栈祖先链，从外到内（不含自己）
+          "FEngineLoop::Tick",           //   仅命中根这一层有；嵌套子调用的
+          "UWorld::Tick",                //   父链已经能从外层 calls 看到，
+          "UMyGameInstance::Tick"        //   所以子节点不重复输出 CallFrom
+        ],
         "calls": [/* 嵌套子调用 */]
       }]
     },

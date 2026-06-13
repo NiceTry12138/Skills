@@ -193,12 +193,17 @@ def attach_logs(matches: List[FrameMatch], logs: List[LogMessage]) -> None:
 # ---- JSON ------------------------------------------------------------------
 
 def event_to_json(ev: TimingEvent) -> dict:
-    return {
+    out = {
         "Name": ev.name,
         "useTime": fmt_duration(ev.duration),
         "Time": fmt_time_abs(ev.start),
-        "calls": [event_to_json(c) for c in ev.children],
     }
+    # 仅 capture root（命中 target_substr 的最外层 scope）有非空 call_from。
+    # 输出在 calls 之前，让用户先看到"我是被谁调用的"，再看"我又调了谁"。
+    if ev.call_from:
+        out["CallFrom"] = list(ev.call_from)
+    out["calls"] = [event_to_json(c) for c in ev.children]
+    return out
 
 
 def log_to_json(log: LogMessage) -> dict:

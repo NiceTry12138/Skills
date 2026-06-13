@@ -48,6 +48,10 @@ class TimingEvent:
     start: float            # 秒
     end: float              # 秒
     children: List["TimingEvent"] = field(default_factory=list)
+    # 仅 capture root（命中 target_substr 的最外层 scope）会填：
+    # 该 scope 在线程调用栈上的祖先 timer 名，从外到内（不含自己）。
+    # 子节点天然为空——它的祖先已经在 JSON 的嵌套 calls 里能看到。
+    call_from: List[str] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -619,6 +623,10 @@ class Analyzer:
                 timer_id=timer_id if timer_id is not None else -1,
                 name=name, start=t, end=t,
             )
+            if is_root_match:
+                # depth_stack 已经把当前 scope 在 _begin_scope 开头 push 进去了，
+                # 所以"祖先"是 depth_stack[:-1]——即捕获 root 之前的所有外层 scope。
+                ev.call_from = [n for (_s, n) in st.depth_stack[:-1]]
             if st.capture_stack:
                 st.capture_stack[-1].children.append(ev)
             st.capture_stack.append(ev)
