@@ -33,29 +33,60 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
        --top-n 10 --track GameThread \
        --output "<output>.json"
    ```
-3. **读 JSON 提炼**给用户：Top-N 帧概览表 + 各帧 Top 子调用（**重点指出反复出现的子 timer**）+ Log 里反复出现的 warning/error + 改进方向假设（标 ⚠️）。**不要原样贴 JSON**——它可能上 MB。
+3. **先读 `meta`** —— JSON 顶部就是全集统计（`total_calls` / `duration_us_per_call` 的 min/p50/p90/p99/max / `top_n_covers_all_hits`）。看完就能判断是否真有"异常"，是否需要更深入的子调用分析。
+   - 若 `meta` 已能回答用户问题（例如 p99/max 都很正常 ⇒ 无异常），直接结论，**跳过第 4 步**。
+4. **要细查"为什么慢"** —— 跑摘要脚本，**不要直接 `Read` `frames`**（可能上 MB）：
+   ```bash
+   python <SKILL_DIR>/scripts/summarize_frames.py "<output>.json" \
+       [--top-frames 5] [--top-subs 15]
+   ```
+   摘要脚本会在 stdout 给你三块（< 10 KB）：
+   - **Top-N 慢帧子调用聚合**：每帧内 sub-timer 的 count + sum_us（同一 sub-scope 在帧内被调多少次、合计多久）
+   - **跨帧全局子 timer 热点**：所有捕获帧打通的 sum_us 排序——**反复出现的子调用**就是优化突破口
+   - **Log 频次摘要**：按 Category 与消息模板（前 80 字符）聚合，找反复出现的 warning/error
+5. **提炼**给用户：Top-N 帧概览 + 重点子 timer + Log 异常 + 改进方向假设（标 ⚠️）。**禁止原样贴 JSON**。
 
 ## 输出 JSON schema
 
 ```jsonc
-[{
-  "frame": 6368,                         // GameThread 帧号（1-based）
-  "useTime": "73.5ms",                   // 整帧时长
-  "Time": "9m21.0202090s",               // 帧起点
-  "<function_name>": {
-    "calls": [{                          // 同帧多次命中 → 多元素
-      "Name": "...", "useTime": "11.3ms", "Time": "...",
-      "calls": [/* 嵌套子调用 */]
-    }]
+{
+  "meta": {                              // ★ 全集统计（µs 单位整数），优先看这里
+    "function": "Tick_UTramSystem",
+    "track": "GameThread",
+    "total_calls": 6514,                 // 整个 trace 里该 timer 总命中次数
+    "hit_frames": 6514,                  // 命中过的帧数（同帧多次合并为 1）
+    "total_frames_on_track": 6515,       // 该 track 上的总帧数（命中率 = hit_frames / 此项）
+    "duration_us_per_call": {            // 单次调用时长分布
+      "min": 412, "p50": 660, "p90": 782, "p99": 908, "max": 1200, "mean": 663
+    },
+    "duration_us_per_frame_accum": {     // 同一帧累计（多次命中合计）
+      "min": 412, "p50": 661, "p90": 783, "p99": 909, "max": 1205, "mean": 664
+    },
+    "frame_total_us_when_hit": {         // 命中帧本身的整帧时长（看是不是该 timer 拖慢了帧）
+      "min": 12100, "p50": 16800, "p90": 28600, "p99": 65300, "max": 74900, "mean": 18900
+    },
+    "top_n_returned": 10,
+    "top_n_covers_all_hits": false       // true ⇒ Top-N 已包含全部命中帧，不必加大 N
   },
-  "Log": [{                              // 在 function scope 时间窗内的日志
-    "Time": "...", "Category": "...", "Message": "...",
-    "File": "...", "Line": 122
+  "frames": [{
+    "frame": 6368,                       // GameThread 帧号（1-based）
+    "useTime": "73.5ms",                 // 整帧时长
+    "Time": "9m21.0202090s",             // 帧起点
+    "<function_name>": {
+      "calls": [{                        // 同帧多次命中 → 多元素
+        "Name": "...", "useTime": "11.3ms", "Time": "...",
+        "calls": [/* 嵌套子调用 */]
+      }]
+    },
+    "Log": [{                            // 在 function scope 时间窗内的日志
+      "Time": "...", "Category": "...", "Message": "...",
+      "File": "...", "Line": 122
+    }]
   }]
-}]
+}
 ```
 
-排序：按 *帧内匹配 timer 累计 Duration* 倒序。
+`frames` 排序：按 *帧内匹配 timer 累计 Duration* 倒序。
 
 ## 行为铁律
 
@@ -63,6 +94,11 @@ description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer �
 2. **utrace 是大二进制（500 MB+），禁止 `Read` 它**——会崩；只把路径喂给脚本。
 3. **不要重写解析逻辑**。`utrace/` 包已覆盖 Protocol 5/6/7 + LZ4 + CPU profiler + Log。要扩展先读 `utrace/analyzer.py`。
 4. **时间格式直接转交**给用户（已经是 `73.5ms` / `9m21.02s` 人读形式）。
+5. **信任 `meta`，不要为分布跑大 `--top-n`**。
+   - JSON 顶部 `meta.duration_us_per_call.{min,p50,p90,p99,max}` 就是**全集**分布——基于全部命中算的，不是 Top-N 子集。要回答"这函数有没有异常帧/最大耗时多少/p99 多少"直接读 `meta`。
+   - `meta.top_n_covers_all_hits = true` 表示 Top-N 已经包含**所有**命中帧，再加大 N 也不会有新数据。
+   - stderr 末尾的 `captured «<func>» trees=N` 与 `meta.total_calls` 同义——表示整份 trace 里该函数共命中 N 次，**Top-N 之外没有更多命中**。
+   - 不要为了"看完整分布"重跑一次 `--top-n 全部命中数`：会再多花一次解析时间 + 数 GB JSON，且不会得到 `meta` 没给过的信息。除非用户**明确要求**逐帧明细，否则不要这么做。
 
 ## 常见失败 → 处置
 

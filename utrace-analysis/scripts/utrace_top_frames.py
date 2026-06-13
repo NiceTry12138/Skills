@@ -34,7 +34,7 @@ import time
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # 让脚本无论从哪里被调用都能找到位于父目录的 `utrace` 包。
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
@@ -142,10 +142,11 @@ class FrameMatch:
 
 def collect_top_frames(analyzer: Analyzer, target_substr: str,
                        track_tid: int, track_frame_type: int,
-                       top_n: int) -> List[FrameMatch]:
+                       top_n: int) -> Tuple[List[FrameMatch], List[FrameMatch]]:
+    """返回 (top_n 截断后的帧, 全部命中的帧——用于算分布)。"""
     frames = analyzer.frames_by_type[track_frame_type]
     if not frames:
-        return []
+        return [], []
     frame_starts = [f.start for f in frames]
 
     # 按 start_time 把 captured 落到帧
@@ -169,7 +170,7 @@ def collect_top_frames(analyzer: Analyzer, target_substr: str,
             frame=frames[i], matches=trees, matched_total=total,
         ))
     out.sort(key=lambda x: x.matched_total, reverse=True)
-    return out[:top_n]
+    return out[:top_n], out
 
 
 def attach_logs(matches: List[FrameMatch], logs: List[LogMessage]) -> None:
@@ -219,6 +220,76 @@ def frame_to_json(fm: FrameMatch, needle: str) -> dict:
             "calls": [event_to_json(m) for m in fm.matches],
         },
         "Log": [log_to_json(l) for l in fm.logs],
+    }
+
+
+def _percentile(sorted_vals: List[float], q: float) -> float:
+    """线性插值分位数；sorted_vals 必须已升序。"""
+    if not sorted_vals:
+        return 0.0
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = pos - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def _stats_us(seconds_list: List[float]) -> Optional[dict]:
+    """对秒级时长数组算 min/p50/p90/p99/max/mean，返回 µs 整数。"""
+    if not seconds_list:
+        return None
+    vals = sorted(seconds_list)
+    mean_s = sum(vals) / len(vals)
+    return {
+        "min": int(round(vals[0] * 1_000_000)),
+        "p50": int(round(_percentile(vals, 0.50) * 1_000_000)),
+        "p90": int(round(_percentile(vals, 0.90) * 1_000_000)),
+        "p99": int(round(_percentile(vals, 0.99) * 1_000_000)),
+        "max": int(round(vals[-1] * 1_000_000)),
+        "mean": int(round(mean_s * 1_000_000)),
+    }
+
+
+def build_meta(needle: str, track: str,
+               all_matches: List[FrameMatch], top_returned: int,
+               total_frames_on_track: int) -> dict:
+    """构造结果 JSON 顶部的 meta 块——全集统计，免得 Claude 再开一遍 trace。"""
+    # 单次调用时长
+    per_call: List[float] = []
+    # 每帧累计（同一帧多次命中累加）
+    per_frame: List[float] = []
+    # 命中帧本身的整帧时长
+    frame_total: List[float] = []
+    for fm in all_matches:
+        per_frame.append(fm.matched_total)
+        frame_total.append(fm.frame.end - fm.frame.start)
+        for tree in fm.matches:
+            per_call.append(tree.duration)
+
+    total_calls = len(per_call)
+    hit_frames = len(all_matches)
+
+    call_stats = _stats_us(per_call)
+    frame_acc_stats = _stats_us(per_frame)
+    frame_total_stats = _stats_us(frame_total)
+
+    # top_returned 的覆盖判断——如果 top-N 包含了全部命中帧，
+    # max(top-N) 必然等于全集 max，Claude 可凭此一字段判断 "无需更大 N"。
+    top_n_covers_all = top_returned >= hit_frames
+
+    return {
+        "function": needle,
+        "track": track,
+        "total_calls": total_calls,
+        "hit_frames": hit_frames,
+        "total_frames_on_track": total_frames_on_track,
+        "duration_us_per_call": call_stats,
+        "duration_us_per_frame_accum": frame_acc_stats,
+        "frame_total_us_when_hit": frame_total_stats,
+        "top_n_returned": min(top_returned, hit_frames),
+        "top_n_covers_all_hits": top_n_covers_all,
     }
 
 
@@ -287,10 +358,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         frame_type = 0
 
-    matches = collect_top_frames(analyzer, args.timer, tid, frame_type, args.top_n)
+    matches, all_matches = collect_top_frames(analyzer, args.timer, tid, frame_type, args.top_n)
     attach_logs(matches, analyzer.log_messages)
 
-    result = [frame_to_json(m, args.timer) for m in matches]
+    meta = build_meta(
+        needle=args.timer, track=args.track,
+        all_matches=all_matches, top_returned=args.top_n,
+        total_frames_on_track=len(analyzer.frames_by_type[frame_type]),
+    )
+    result = {
+        "meta": meta,
+        "frames": [frame_to_json(m, args.timer) for m in matches],
+    }
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
