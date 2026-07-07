@@ -1,0 +1,4 @@
+interface:
+  display_name: "WPA Analysis"
+  short_description: "Analyze ETL traces for CPU preemption"
+  default_prompt: "Use $wpa-analysis to analyze a spline ETL trace for CPU preemption."

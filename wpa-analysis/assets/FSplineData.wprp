@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0">
+  <Profiles>
+    <EventCollector Id="EC_FSplineData" Name="FSplineDataCollector">
+      <BufferSize Value="1024"/>
+      <Buffers Value="64"/>
+    </EventCollector>
+
+    <!-- Must match TRACELOGGING_DEFINE_PROVIDER(g_MySplineProvider, ..., GUID). -->
+    <EventProvider Id="EP_FSplineData" Name="11223344-5566-7788-99aa-bbccddeeff00"/>
+
+    <Profile Id="FSplineData.Verbose.File"
+             Name="FSplineData"
+             Description="FSplineData TraceLogging provider"
+             LoggingMode="File"
+             DetailLevel="Verbose">
+      <Collectors>
+        <EventCollectorId Value="EC_FSplineData">
+          <EventProviders>
+            <EventProviderId Value="EP_FSplineData"/>
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

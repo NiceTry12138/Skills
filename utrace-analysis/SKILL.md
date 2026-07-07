@@ -1,6 +1,6 @@
 ---
 name: utrace-analysis
-description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer 名，需要定位该函数最慢的若干帧、查看完整调用子树和同时间窗日志时触发。Skill 用纯 Python 解析器（不依赖 UnrealInsights.exe）抽出最耗时的 N 帧并输出 JSON，供 Claude 提炼瓶颈和优化建议。关键词：utrace、Unreal Insights、timing 分析、卡帧、性能瓶颈、慢函数、函数耗时。
+description: 当用户提供 .utrace 文件 + 一个有问题的函数 / timer 名，需要定位该函数最慢的若干帧、查看完整调用子树和同时间窗日志时触发。Skill 用纯 Python 解析器（不依赖 UnrealInsights.exe）抽出最耗时的 N 帧并输出 JSON，供 Codex 提炼瓶颈和优化建议。关键词：utrace、Unreal Insights、timing 分析、卡帧、性能瓶颈、慢函数、函数耗时。
 ---
 
 # utrace-analysis SKILL
